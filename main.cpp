@@ -8,6 +8,7 @@ int main()
 {
     while (true)
     {
+        fputs("> ", stdout);
         std::vector<char> buff(1024);
         if (!fgets(buff.data(), buff.size(), stdin))
         {
