@@ -1,38 +1,60 @@
-#include <unistd.h>
+#include <iostream>
+#include <string>
 
 #include "Job.h"
 #include "Pipe.h"
 
-int main(int argc, char *argv[])
+int main()
 {
-    if (argc != 2)
+    while (true)
     {
-        fputs("引数の数が不正です\n", stderr);
-        return EXIT_FAILURE;
-    }
+        std::vector<char> buff(1024);
+        if (!fgets(buff.data(), buff.size(), stdin))
+        {
+            break;
+        }
 
-    int lastfd = -1;
-    try
-    {
-        const auto job = ParseJob(argv[1]);
-        lastfd = PipeCommand(job);
+        const auto job = ParseJob(buff.data());
+        FILE *outfile = nullptr;
+        try
+        {
+            outfile = PipeCommand(job);
+        }
+        catch (const std::runtime_error &e)
+        {
+            fprintf(stderr, "PipeCommand error, %s\n", e.what());
+            return EXIT_FAILURE;
+        }
 
         if (!job.redirectFilename.empty())
         {
-            Redirect(lastfd, job.redirectFilename);
+            try
+            {
+                Redirect(outfile, job.redirectFilename);
+            }
+            catch (const std::runtime_error &e)
+            {
+                fclose(outfile);
+                fprintf(stderr, "Redirect error, %s\n", e.what());
+                return EXIT_FAILURE;
+            }
         }
         else
         {
-            WriteStdout(lastfd);
+            try
+            {
+                WriteStdout(outfile);
+            }
+            catch (const std::runtime_error &e)
+            {
+                fclose(outfile);
+                fprintf(stderr, "WriteStdout error, %s\n", e.what());
+                return EXIT_FAILURE;
+            }
         }
 
-        close(lastfd);
-        return EXIT_SUCCESS;
+        fclose(outfile);
     }
-    catch (const std::runtime_error &e)
-    {
-        close(lastfd);
-        fprintf(stderr, "%s\n", e.what());
-        return EXIT_FAILURE;
-    }
+
+    return EXIT_SUCCESS;
 }

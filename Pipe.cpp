@@ -2,6 +2,8 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -10,78 +12,59 @@
 #include <iterator>
 #include <algorithm>
 
-void WriteStdout(const int fd)
+void WriteStdout(FILE *f)
 {
-    std::vector<char> buff(1024, 0);
     while (true)
     {
-        const auto rSize = read(fd, buff.data(), buff.size());
-        if (rSize == -1)
+        std::vector<char> buf(1024, '\0');
+        if (!fgets(buf.data(), buf.size(), f))
         {
-            const std::string err = "read error, " + std::string(strerror(errno));
-            throw std::runtime_error(err);
+            break;
         }
-        if (rSize == 0)
+        if (fprintf(stdout, "%s", buf.data()) < 0)
         {
-            return;
-        }
-
-        const auto wrSize = write(STDOUT_FILENO, buff.data(), rSize);
-        if (wrSize == -1)
-        {
-            const std::string err = "write error, " + std::string(strerror(errno));
-            throw std::runtime_error(err);
-        }
-        if (wrSize != rSize)
-        {
-            const std::string err = "write size error, " + std::to_string(wrSize);
-            throw std::runtime_error(err);
+            throw std::runtime_error("fprintf error");
         }
     }
 }
 
-void Redirect(const int fd, const std::filesystem::path &path)
+void Redirect(FILE *f, const std::filesystem::path &path)
 {
-    FILE *fin = fdopen(fd, "r");
-    if (!fin)
+    FILE *outfile = fopen(path.c_str(), "w");
+    if (!outfile)
     {
-        const std::string err = "in fdopen error, " + std::string(std::strerror(errno));
-        throw std::runtime_error(err);
-    }
-
-    FILE *fout = fopen(path.c_str(), "w");
-    if (!fout)
-    {
-        fclose(fin);
-        const std::string err = "out fdopen error, " + std::string(std::strerror(errno));
+        const std::string err = "fopen error, " + std::string(std::strerror(errno));
         throw std::runtime_error(err);
     }
 
     while (true)
     {
         std::vector<char> buf(1024, '\0');
-        if (!fgets(buf.data(), buf.size(), fin))
+        if (!fgets(buf.data(), buf.size(), f))
         {
             break;
         }
-        if (fprintf(fout, "%s", buf.data()) < 0)
+        if (fprintf(outfile, "%s", buf.data()) < 0)
         {
-            fclose(fin);
-            fclose(fout);
+            fclose(outfile);
             throw std::runtime_error("fprintf error");
         }
     }
-    fclose(fin);
-    fclose(fout);
+    fclose(outfile);
 }
 
-// パイプには lseek できない
-int PipeCommand(const Job &job)
+FILE *PipeCommand(const Job &job)
 {
-    // TODO: STDIN_FILENO でいいの?
     int pipelinkfd = STDIN_FILENO;
+    if (pipelinkfd == -1)
+    {
+        const std::string err = "open error, " + std::string(std::strerror(errno));
+        throw std::runtime_error(err);
+    }
+
     for (const auto &command : job.commands)
     {
+        // NOTE: パイプには lseek できない
         int pipes[2];
         if (pipe(pipes) == -1)
         {
@@ -92,8 +75,8 @@ int PipeCommand(const Job &job)
         const int rfd = pipes[0];
         const int wfd = pipes[1];
 
-        const auto forkret = fork();
-        if (forkret == -1)
+        const auto forked = fork();
+        if (forked == -1)
         {
             const std::string err = "fork error, " + std::string(std::strerror(errno));
             close(pipelinkfd);
@@ -103,11 +86,11 @@ int PipeCommand(const Job &job)
         }
 
         // child
-        if (forkret == 0)
+        if (forked == 0)
         {
             if (dup2(pipelinkfd, STDIN_FILENO) == -1)
             {
-                const std::string err = "dup2 error, " + std::string(std::strerror(errno));
+                const std::string err = "infd dup2 error, " + std::string(std::strerror(errno));
                 close(pipelinkfd);
                 close(rfd);
                 close(wfd);
@@ -115,7 +98,7 @@ int PipeCommand(const Job &job)
             }
             if (dup2(wfd, STDOUT_FILENO) == -1)
             {
-                const std::string err = "dup2 error, " + std::string(std::strerror(errno));
+                const std::string err = "outfd dup2 error, " + std::string(std::strerror(errno));
                 close(pipelinkfd);
                 close(rfd);
                 close(wfd);
@@ -125,12 +108,13 @@ int PipeCommand(const Job &job)
             std::vector<std::string> args = command.args;
             std::vector<char *> ptrs;
             std::for_each(args.begin(), args.end(), [&ptrs](auto &arg) { ptrs.push_back(arg.data()); });
+            // execv は最後の要素に nullptr が必要
             ptrs.push_back(nullptr);
 
             // execv が成功すればそのプロセスに置き換わる
             execv(args.front().c_str(), ptrs.data());
 
-            // error
+            // プロセスが置き換わらなかったのでエラー
             const std::string err = "execv error, " + std::string(std::strerror(errno));
             close(pipelinkfd);
             close(rfd);
@@ -166,7 +150,7 @@ int PipeCommand(const Job &job)
             // シグナルにより終了した
             if (WIFSIGNALED(status))
             {
-                const std::string err = "WIFSIGNALED error, " + std::to_string(WTERMSIG(status));
+                const std::string err = "error WIFSIGNALED, " + std::to_string(WTERMSIG(status));
                 close(pipelinkfd);
                 close(rfd);
                 close(wfd);
@@ -175,5 +159,12 @@ int PipeCommand(const Job &job)
         }
     }
 
-    return pipelinkfd;
+    FILE *f = fdopen(pipelinkfd, "r");
+    if (!f)
+    {
+        const std::string err = "fdopen error, " + std::string(std::strerror(errno));
+        throw std::runtime_error(err);
+    }
+
+    return f;
 }

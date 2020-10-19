@@ -350,5 +350,5 @@ MigrationBackup/
 .ionide/
 
 .vscode/
-main
 *.o
+simpleshell
