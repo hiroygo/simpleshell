@@ -56,12 +56,6 @@ void Redirect(FILE *f, const std::filesystem::path &path)
 FILE *PipeCommand(const Job &job)
 {
     int pipelinkfd = STDIN_FILENO;
-    if (pipelinkfd == -1)
-    {
-        const std::string err = "open error, " + std::string(std::strerror(errno));
-        throw std::runtime_error(err);
-    }
-
     for (const auto &command : job.commands)
     {
         // NOTE: パイプには lseek できない
@@ -140,7 +134,12 @@ FILE *PipeCommand(const Job &job)
             if (WIFEXITED(status))
             {
                 // 1 つ前のコマンドの標準出力とのパイプを閉じる
-                close(pipelinkfd);
+                // ただしこのシェル自身の標準入力なら閉じない
+                // 閉じると、標準入力でループできなくなるから
+                if (pipelinkfd != STDIN_FILENO)
+                {
+                    close(pipelinkfd);
+                }
 
                 // 今回実行したコマンドの標準出力を取っておき
                 // 次のコマンドの標準入力を接続する
