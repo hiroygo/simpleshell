@@ -5,6 +5,17 @@
 
 int main()
 {
+    std::vector<std::filesystem::path> pathes;
+    try
+    {
+        pathes = GetPathes();
+    }
+    catch (const std::runtime_error &e)
+    {
+        fprintf(stderr, "GetPathes error, %s\n", e.what());
+        return EXIT_FAILURE;
+    }
+
     while (true)
     {
         fputs("> ", stdout);
@@ -14,11 +25,21 @@ int main()
             break;
         }
 
-        const auto job = ParseJob(buff.data());
+        Job job = ParseJob(buff.data());
+        try
+        {
+            job = ResolveCommandPath(pathes, job);
+        }
+        catch (const std::runtime_error &e)
+        {
+            fprintf(stderr, "ResolveCommandPath error, %s\n", e.what());
+            return EXIT_FAILURE;
+        }
+
         FILE *outfile = nullptr;
         try
         {
-            outfile = PipeCommand(job);
+            outfile = PipeCommand(stdin, job);
         }
         catch (const std::runtime_error &e)
         {

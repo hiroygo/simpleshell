@@ -1,5 +1,10 @@
 #include "Job.h"
 
+#include <regex>
+#include <filesystem>
+
+#include <unistd.h>
+
 /*
 # bash の構文を BNF っぽく定義してみる
 * 右辺には正規表現を用いる
@@ -194,4 +199,55 @@ Job ParseJob(const char *job)
 {
     StringToBeParsed p(job);
     return ParseJob(p);
+}
+
+std::vector<std::filesystem::path> GetPathes()
+{
+    const auto ppath = getenv("PATH");
+    if (!ppath)
+    {
+        throw std::runtime_error("getenv error, 環境変数 PATH が存在しません");
+    }
+
+    std::vector<std::filesystem::path> pathes;
+    const std::string path(ppath);
+    const std::regex regex("([^:]+)");
+    for (std::sregex_iterator itr(path.cbegin(), path.cend(), regex), end; itr != end; ++itr)
+    {
+        pathes.push_back(itr->str());
+    }
+
+    return pathes;
+}
+
+Job ResolveCommandPath(const std::vector<std::filesystem::path> &pathes, const Job &job)
+{
+    Job ret = job;
+    for (auto &command : ret.commands)
+    {
+        if (command.args.empty())
+        {
+            continue;
+        }
+
+        for (const auto &dir : pathes)
+        {
+            const auto path = dir / command.args.front();
+            try
+            {
+                if (std::filesystem::exists(path))
+                {
+                    command.args.front() = path.c_str();
+                    break;
+                }
+            }
+            catch (std::filesystem::filesystem_error &e)
+            {
+                const std::string err = "exists error, " + std::string(e.what());
+                throw std::runtime_error(err);
+            }
+        }
+    }
+
+    return ret;
 }

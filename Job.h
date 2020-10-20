@@ -18,3 +18,11 @@ struct Job final
 };
 
 Job ParseJob(const char *job);
+
+// 環境変数 PATH に記述されたパス一覧を取得する
+// エラー時には std::runtime_error を発生させる
+std::vector<std::filesystem::path> GetPathes();
+
+// pathes 中のディレクトリにコマンドが存在するか探し、存在すればそのパスでコマンドパスを置き換える
+// エラー時には std::runtime_error を発生させる
+Job ResolveCommandPath(const std::vector<std::filesystem::path> &pathes, const Job &job);
